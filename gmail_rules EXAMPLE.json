@@ -1,0 +1,24 @@
+{
+  "finance": [
+    "admin@bank.com",
+    "test@test_bank.rs",
+    "bank@raiffeisenbank.rs"
+  ],
+  "family": [
+    "dad@gmail.com",
+    "mom@gmail.com",
+    "grandad@gmail.com",
+    "sister@gmail.com"
+  ],
+  "medical": [
+    "medica@medica.com"
+  ],
+  "programming": [
+    "noreply@github.com",
+    "support@github.com"
+  ],
+  "uncategorized_trash": [
+    "Unknown",
+    "test@test.test.eu"
+  ]
+}
