@@ -3,3 +3,4 @@ gmail_rules.json
 gmail_rules.json.bak
 senders_list.json
 senders_list.json.bak
+__pycache__/
