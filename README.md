@@ -54,7 +54,9 @@ Google requires every program that reads your mail to have its own "key". You cr
 
 On the first run, a browser window opens and asks you to allow the app to access your Gmail. Because the app is only for you, Google may show a "this app isn't verified" warning. Choose **Advanced → Continue**.
 
-> The script saves your login back into `client_secret.json` so you don't have to log in every time. Keep a backup copy of the original file somewhere safe.
+> Google only shows the client secret **once**, when you create it. Download the JSON right away and keep a backup copy. If you lose it, create a new OAuth client (**Create credentials → OAuth client ID → Desktop app**).
+>
+> Your login is saved in a separate file, `token.json`, so you don't have to log in every time. It is created automatically on the first run. Never share it.
 
 ## Step 3: Write your rules (`gmail_rules.json`)
 
@@ -250,12 +252,50 @@ If it still fails with rate-limit errors, wait a few minutes and run it again. E
 
 ---
 
+## What's fixed
+
+These problems existed in the first version and are now fixed.
+
+| Problem | What was wrong | What it does now |
+|---|---|---|
+| **Login overwrote your Google key** | The login was saved into `client_secret.json`, replacing the file you downloaded. A fresh file from Google then crashed the script. | The login is saved in its own file, **`token.json`**. `client_secret.json` is never changed. |
+| **Cron failed without telling you** | If the login had expired, the weekly job carried on without access and reported "Done". | It stops, writes `AUTH FAILED` to the log and exits with an error. Fix: run `python3 gmail-automation.py` by hand once to log in again. |
+| **Errors were hidden** | The weekly job ignored all errors (rate limits, "insufficient scopes"), so it said "Labeled 0 emails" while failing. | Every Gmail error is written to the log as `ERROR: ...`, and the job exits with an error code at the end. |
+| **Delete failed with 403** | Permanent delete needs a bigger permission than the tool asks for. | Old emails now go to the **Trash** (recoverable for 30 days). |
+| **Too many API calls** | The weekly job sent one API call per email. | It labels and trashes up to 1,000 emails in **one** call (`batchModify`). Much faster and far less likely to hit Gmail's rate limit. |
+| **No way to preview** | You could only find out what was trashed afterwards. | Run with **`--dry-run`** (see below). |
+| **Same login code in two places** | Both scripts had their own copy, and they had drifted apart. | One shared file, **`auth.py`**, used by both. |
+| **Broken Trash filter** | The old search `-label:[Gmail]/Trash` is not valid Gmail search. | Uses `-in:trash`. |
+| **Emails labeled twice** | A sender listed in two categories got both labels. | The weekly job only touches emails that have **no label** (`has:nouserlabels`). |
+
+### Preview before anything is changed: `--dry-run`
+
+```bash
+python3 cron-job-weekly.py --dry-run
+```
+
+It changes nothing. It prints how many emails would be labeled and the sender and subject of the first 25 emails that **would be moved to Trash**. Always run this first, and add any important sender you see to `gmail_rules.json`.
+
+### Because of the "no label" rule
+
+- Old emails keep their label. If you move a sender to another category, only their **new** emails get the new label.
+- Emails you labeled by hand in Gmail are never trashed by the cleanup.
+
+### Not fixed yet
+
+- `gmail-automation.py` (the first-run script) still labels one email per API call and handles 100 emails per sender. The "100-email limit" section above still applies.
+- Nothing checks that a sender is in only one category. Check this yourself in Step 3b.
+
+---
+
 ## Files in this folder
 
 | File | What it is |
 |---|---|
 | `gmail-automation.py` | First-time setup: builds the sender list, labels all existing emails, optionally cleans up |
-| `cron-job-weekly.py` | The scheduled job: labels new emails and trashes old unsorted ones |
+| `cron-job-weekly.py` | The scheduled job: labels new emails and trashes old unsorted ones (`--dry-run` to preview) |
+| `auth.py` | Login code shared by both scripts |
+| `token.json` | Your saved login (**private**, created automatically) |
 | `client_secret.json` | Your Google key (**private**, never share it) |
 | `senders_list.json` | List of everyone who emailed you, with counts (made by the script) |
 | `gmail_rules.json` | Your categories and senders (**you write this**) |
@@ -273,7 +313,9 @@ If it still fails with rate-limit errors, wait a few minutes and run it again. E
 |---|---|
 | `gmail_rules.json not found` | You haven't created the rules file yet (Step 3b). |
 | `Expecting property name enclosed in double quotes` or other JSON errors | A JSON file has a typo (missing quote, extra comma, or stray text). Paste it into an online JSON checker to find the line. |
-| `insufficient authentication scopes` | The saved login was created with different permissions. Delete the saved login (restore `client_secret.json` from your backup) and run again. |
+| `insufficient authentication scopes` | The saved login was created with different permissions. Delete `token.json` and run `python3 gmail-automation.py` again to log in. |
+| `AUTH FAILED` in the log | Your login expired. Run `python3 gmail-automation.py` by hand once; it creates a new `token.json`. |
+| `client_secret.json` crashes or is "not valid JSON" | It was overwritten by an older version of the script. Create a new OAuth client in Google Cloud Console and download the JSON again (Step 2). |
 | Browser says "app isn't verified" | Normal for personal projects. Choose **Advanced → Continue**, and make sure your address is listed as a test user. |
 | Cron job does nothing | Run `python3 cron-job-weekly.py` by hand and read the error. Check `crontab -l` and the log file. |
 | `ModuleNotFoundError` | Install the libraries again: `pip install google-auth-oauthlib google-auth-httplib2 google-api-python-client` |

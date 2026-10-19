@@ -8,17 +8,13 @@ Gmail Automation Script
 """
 
 import os
-import pickle
-import base64
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.errors import HttpError
-from googleapiclient.discovery import build
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
 from typing import Any
+from auth import get_service
+
 
 # Gmail API scopes
 SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
@@ -26,48 +22,8 @@ SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
 class GmailAutomation:
     def __init__(self):
-        self.service: Any = None
-        self.authenticate()
+        self.service: Any = get_service(interactive=True)
         self.rules = self.load_rules()
-
-    def authenticate(self):
-        """Authenticate with Gmail API"""
-        creds = None
-
-        print("Checking for existing credentials...")
-        # Load existing credentials
-        if os.path.exists("client_secret.json"):
-            try:
-                with open("client_secret.json", "rb") as token:
-                    print("Token file found: ", token)
-                    creds = pickle.load(token)
-                    print("Credentials loaded successfully.", creds)
-            except PermissionError:
-                print(
-                    "Permission error while loading credentials. Please check file permissions."
-                )
-                return
-            except Exception as e:
-                print(f"Error loading credentials: {e}")
-                return
-
-        print("Credentials not valid.. Trying to refresh...")
-        # If no valid credentials, get new ones
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    "client_secret.json", SCOPES
-                )
-                creds = flow.run_local_server(port=0)
-
-            # Save credentials for future use
-            with open("client_secret.json", "wb") as token:
-                pickle.dump(creds, token)
-
-        self.service = build("gmail", "v1", credentials=creds)
-        print(" Successfully authenticated with Gmail")
 
     def get_all_senders(self):
         senders = {}
@@ -309,14 +265,14 @@ class GmailAutomation:
 
     def delete_old_uncategorized(self, days=30):
         """Delete uncategorized emails older than specified days"""
-        print("🗑️  Checking for old uncategorized emails...\n")
+        print("Checking for old uncategorized emails...\n")
 
         cutoff_date = datetime.now() - timedelta(days=days)
 
         try:
             # Build query to exclude all labeled emails
             exclude_labels = " ".join([f"-label:{cat}" for cat in self.rules.keys()])
-            query = f'before:{cutoff_date.strftime("%Y/%m/%d")} {exclude_labels} -label:[Gmail]/Trash'
+            query = f'before:{cutoff_date.strftime("%Y/%m/%d")} {exclude_labels} -in:trash'
 
             results = (
                 self.service.users()

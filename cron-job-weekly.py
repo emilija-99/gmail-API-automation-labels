@@ -5,17 +5,11 @@ Run this weekly via cron - it's lightweight and efficient
 """
 
 import os
-import pickle
 import json
 import logging
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.errors import HttpError
-from googleapiclient.discovery import build
 from datetime import datetime, timedelta
-
-SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
+from auth import get_service, AuthError
 
 logging.basicConfig(
     filename='/tmp/gmail_automation.log',
@@ -24,33 +18,17 @@ logging.basicConfig(
 )
 
 class GmailWeeklyAutomation:
-    def __init__(self):
-        self.service = None
-        self.authenticate()
+    def __init__(self, dry_run=False):
+        self.service = get_service(interactive=False)  # raises AuthError
         self.rules = self.load_rules()
         self.label_ids = {}
+        self.dry_run = dry_run
+        self.errors = 0
 
     def log(self, msg):
         """Log to both file and console"""
         logging.info(msg)
         print(msg)
-
-    def authenticate(self):
-        """Use existing credentials"""
-        if not os.path.exists('client_secret.json'):
-            self.log("ERROR: client_secret.json not found")
-            self.log("   Please run '1_initial_setup.py' first")
-            return False
-
-        with open('client_secret.json', 'rb') as token:
-            creds = pickle.load(token)
-
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-
-        self.service = build('gmail', 'v1', credentials=creds)
-        self.log("✓ Authenticated")
-        return True
 
     def load_rules(self):
         """Load rules"""
@@ -72,8 +50,9 @@ class GmailWeeklyAutomation:
                 if label['name'] == label_name:
                     self.label_ids[label_name] = label['id']
                     return label['id']
-        except:
-            pass
+        except HttpError as e:
+            self.errors += 1
+            self.log(f"   ERROR: {e}")
 
         return None
 
@@ -93,23 +72,21 @@ class GmailWeeklyAutomation:
                     # Find emails without this label yet
                     results = self.service.users().messages().list(
                         userId='me',
-                        q=f'from:{sender} -label:{category}',
+                        q=f'from:{sender} has:nouserlabels -in:trash',
                         maxResults=100
                     ).execute()
 
-                    for msg in results.get('messages', []):
-                        try:
-                            self.service.users().messages().modify(
-                                userId='me',
-                                id=msg['id'],
-                                body={'addLabelIds': [label_id]}
-                            ).execute()
-                            count += 1
-                            total += 1
-                        except:
-                            pass
-                except:
-                    pass
+                    ids = [m['id'] for m in results.get('messages', [])]
+                    if ids and not self.dry_run:
+                        self.service.users().messages().batchModify(
+                            userId='me',
+                            body={'ids': ids, 'addLabelIds': [label_id]}
+                        ).execute()
+                    count += len(ids)
+                    total += len(ids)
+                except HttpError as e:
+                    self.errors += 1
+                    self.log(f"   ERROR: {e}")
 
             if count > 0:
                 self.log(f"   • {category}: +{count} emails")
@@ -121,8 +98,7 @@ class GmailWeeklyAutomation:
         self.log(f"\nCleaning old uncategorized (>{days} days)...")
 
         cutoff = datetime.now() - timedelta(days=days)
-        exclude = ' '.join([f'-label:{cat}' for cat in self.rules.keys()])
-        query = f'before:{cutoff.strftime("%Y/%m/%d")} {exclude} -label:[Gmail]/Trash'
+        query = f'before:{cutoff.strftime("%Y/%m/%d")} has:nouserlabels -in:trash'
 
         try:
             results = self.service.users().messages().list(
@@ -131,21 +107,27 @@ class GmailWeeklyAutomation:
                 maxResults=100
             ).execute()
 
-            count = 0
-            for msg in results.get('messages', []):
-                try:
-                    self.service.users().messages().trash(
-                        userId='me', id=msg['id']).execute()
-                    count += 1
-                except:
-                    pass
+            ids = [m['id'] for m in results.get('messages', [])]
 
-            if count > 0:
-                self.log(f"   ✓ Moved {count} emails to Trash")
-            else:
-                self.log(f"   ✓ No old emails to delete")
-        except:
-            pass
+            if self.dry_run:
+                self.log(f"   DRY RUN: {len(ids)} emails WOULD be moved to Trash:")
+                for mid in ids[:25]:
+                    m = self.service.users().messages().get(
+                        userId='me', id=mid, format='metadata',
+                        metadataHeaders=['From', 'Subject']).execute()
+                    h = {x['name']: x['value'] for x in m['payload']['headers']}
+                    self.log(f"     {h.get('From', '?')[:40]} | {h.get('Subject', '?')[:60]}")
+                return
+
+            if ids:
+                self.service.users().messages().batchModify(
+                    userId='me',
+                    body={'ids': ids, 'addLabelIds': ['TRASH']}
+                ).execute()
+                self.log(f"   ✓ Moved {len(ids)} emails to Trash")
+        except HttpError as e:
+            self.errors += 1
+            self.log(f"   ERROR: {e}")
 
     def run(self):
         """Run automation"""
@@ -165,5 +147,13 @@ class GmailWeeklyAutomation:
         self.log("="*60 + "\n")
 
 if __name__ == '__main__':
-    automation = GmailWeeklyAutomation()
-    automation.run()
+    import sys
+    try:
+        automation = GmailWeeklyAutomation(dry_run='--dry-run' in sys.argv)
+        automation.run()
+    except AuthError as e:
+        logging.error(f"AUTH FAILED: {e}")
+        sys.exit(2)
+    if automation.errors:
+        sys.exit(1)
+

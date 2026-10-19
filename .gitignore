@@ -1,6 +1,8 @@
-client_secret.json
 gmail_rules.json
 gmail_rules.json.bak
 senders_list.json
 senders_list.json.bak
 __pycache__/
+token.json
+client_secret.json
+client_secret_original.json
